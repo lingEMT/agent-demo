@@ -21,7 +21,7 @@ wheels/
 *.egg
 
 # 虚拟环境
-venv/
+helloagents-trip-planner/backend/venv/
 env/
 ENV/
 .venv
@@ -48,4 +48,8 @@ htmlcov/
 # 操作系统
 .DS_Store
 Thumbs.db
+
+# 其他
+.claude
+agent.iml
 
