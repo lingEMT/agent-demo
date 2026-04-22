@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where claude-code:*)",
+      "Bash(dir \"C:\\\\Users$USER\\\\AppData\\\\Local\\\\anthropic\\\\claude-code\")",
+      "Bash(dir \"$LOCALAPPDATA/anthropic/claude-code\")",
+      "WebSearch",
+      "Bash(pip install:*)",
+      "Bash(pip uninstall:*)",
+      "Bash(python run.py)",
+      "Bash(python:*)",
+      "Bash(curl:*)",
+      "Bash(pip list:*)",
+      "Bash(ls -la app/api/*.py app/agents/*.py app/services/*.py)",
+      "Bash(find helloagents-trip-planner/frontend -type f -name *.vue -o -name *.ts -o -name *.js)"
+    ]
+  }
+}
