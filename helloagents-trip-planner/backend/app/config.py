@@ -41,9 +41,9 @@ class Settings(BaseSettings):
     unsplash_secret_key: str = ""
 
     # LLM配置 (从环境变量读取,由HelloAgents管理)
-    openai_api_key: str = ""
-    openai_base_url: str = ""
-    openai_model: str = ""
+    llm_api_key: str = ""
+    llm_base_url: str = ""
+    llm_model: str = ""
 
     # 日志配置
     log_level: str = "INFO"
@@ -78,10 +78,10 @@ def validate_config():
     elif not settings.amap_api_key:
         warnings.append("AMAP_API_KEY未配置，建议同时配置")
 
-    # LLM会自动从LLM_API_KEY读取,不强制要求OPENAI_API_KEY
-    llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+    # LLM会自动从LLM_API_KEY读取
+    llm_api_key = os.getenv("LLM_API_KEY")
     if not llm_api_key:
-        warnings.append("LLM_API_KEY或OPENAI_API_KEY未配置,LLM功能可能无法使用")
+        warnings.append("LLM_API_KEY未配置,LLM功能可能无法使用")
 
     if errors:
         error_msg = "配置错误:\n" + "\n".join(f"  - {e}" for e in errors)
@@ -105,9 +105,9 @@ def print_config():
     print(f"高德地图App Code: {'已配置' if settings.amap_app_code else '未配置'}（必需）")
 
     # 检查LLM配置
-    llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    llm_base_url = os.getenv("LLM_BASE_URL") or settings.openai_base_url
-    llm_model = os.getenv("LLM_MODEL_ID") or settings.openai_model
+    llm_api_key = os.getenv("LLM_API_KEY")
+    llm_base_url = os.getenv("LLM_BASE_URL") or settings.llm_base_url
+    llm_model = os.getenv("LLM_MODEL_ID") or settings.llm_model
 
     print(f"LLM API Key: {'已配置' if llm_api_key else '未配置'}")
     print(f"LLM Base URL: {llm_base_url}")

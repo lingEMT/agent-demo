@@ -142,13 +142,13 @@ class LLMMonitor:
         settings = get_settings()
 
         # 从环境变量读取配置
-        api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or settings.openai_api_key
+        api_key = os.getenv("LLM_API_KEY") or settings.llm_api_key
         api_key_secret = SecretStr(api_key)
-        base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or settings.openai_base_url
-        model = os.getenv("LLM_MODEL_ID") or os.getenv("OPENAI_MODEL") or settings.openai_model
+        base_url = os.getenv("LLM_BASE_URL") or settings.llm_base_url
+        model = os.getenv("LLM_MODEL_ID") or settings.llm_model
 
         if not api_key:
-            raise ValueError("LLM API Key未配置,请设置环境变量 LLM_API_KEY 或 OPENAI_API_KEY")
+            raise ValueError("LLM API Key未配置,请设置环境变量 LLM_API_KEY")
 
         return ChatOpenAI(
             api_key=api_key_secret,

@@ -28,14 +28,14 @@ def get_llm(token_key: Optional[str] = None) -> ChatOpenAI:
     if _llm_instance is None:
         settings = get_settings()
 
-        # 从环境变量读取配置
-        api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or settings.openai_api_key
-        api_key_secret = SecretStr(api_key)
-        base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or settings.openai_base_url
-        model = os.getenv("LLM_MODEL_ID") or os.getenv("OPENAI_MODEL") or settings.openai_model
+        # 从配置实例读取配置
+        api_key = settings.llm_api_key
+        # api_key_secret = SecretStr(api_key)
+        base_url = settings.llm_base_url
+        model = settings.llm_model
 
         if not api_key:
-            raise ValueError("LLM API Key未配置,请设置环境变量 LLM_API_KEY 或 OPENAI_API_KEY")
+            raise ValueError("LLM API Key未配置,请设置环境变量 LLM_API_KEY")
 
         # 创建可监控的ChatOpenAI实例
         _llm_instance = LLMMonitor.get_monitored_llm(token_key or "default")
