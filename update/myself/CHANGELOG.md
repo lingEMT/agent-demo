@@ -2,6 +2,48 @@
 
 ## [未发布] 2026-04-23
 
+### Bug 修复
+
+#### App.vue v-model 语法错误
+
+**问题**：Vue 编译器报错 "v-model value must be a valid JavaScript member expression"
+
+**原因**：v-model 不能直接绑定到数组字面量 `['1']`
+
+**解决**：
+- 在 script setup 中定义响应式变量：`const selectedKeys = ref(['1'])`
+- 修改 v-model 绑定：`v-model:selectedKeys="selectedKeys"`
+
+**修改文件**：`frontend/src/App.vue`
+
+**验证**：✅ 导航菜单正常工作
+
+---
+
+#### 循环导入错误修复
+
+**问题**：
+- `llm_service.py` 和 `llm_monitor.py` 之间存在循环依赖
+- `llm_monitor.py` 导入 `get_llm` 从 `llm_service.py`
+- `llm_service.py` 导入 `get_monitored_llm` 从 `llm_monitor.py`
+
+**解决**：
+1. 移除 `llm_monitor.py` 中对 `get_llm` 的导入
+2. 在 `LLMMonitor` 类中添加 `_create_llm_instance()` 静态方法
+3. 修改 `llm_service.py` 导入 `LLMMonitor` 而不是 `get_monitored_llm`
+4. 修复 Pydantic 属性设置错误，使用实例变量 `_token_key` 替代直接属性
+
+**修改文件**：
+- `backend/app/services/llm_monitor.py`
+- `backend/app/services/llm_service.py`
+
+**验证**：
+- ✅ 所有模块导入成功
+- ✅ LLM服务正常启动
+- ✅ Token监控功能正常工作
+
+---
+
 ### 新增功能
 
 #### Token调用量可视化功能

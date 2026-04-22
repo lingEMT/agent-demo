@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Query, Depends
 from typing import Optional
-from ..services.token_usage_tracker import get_token_usage_tracker
+from ...services.token_usage_tracker import get_token_usage_tracker
 
 router = APIRouter(prefix="/token-monitor", tags=["Token监控"])
 

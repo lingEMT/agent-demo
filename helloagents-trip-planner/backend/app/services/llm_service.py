@@ -1,11 +1,13 @@
 """LLM服务模块 - 使用LangChain"""
 
 import os
+from typing import Optional
+
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from ..config import get_settings
-from .llm_monitor import get_monitored_llm
+from .llm_monitor import LLMMonitor
 
 # 全局LLM实例
 _llm_instance = None
@@ -36,11 +38,12 @@ def get_llm(token_key: Optional[str] = None) -> ChatOpenAI:
             raise ValueError("LLM API Key未配置,请设置环境变量 LLM_API_KEY 或 OPENAI_API_KEY")
 
         # 创建可监控的ChatOpenAI实例
-        _llm_instance = get_monitored_llm(token_key or "default")
+        _llm_instance = LLMMonitor.get_monitored_llm(token_key or "default")
 
         print(f"[OK] LLM服务初始化成功 (LangChain)")
         print(f"   Base URL: {base_url}")
         print(f"   模型: {model}")
+        print(f"   Token Key: {token_key or 'default'}")
 
     return _llm_instance
 

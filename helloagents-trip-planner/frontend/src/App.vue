@@ -6,7 +6,7 @@
           🌍 HelloAgents智能旅行助手
         </div>
         <a-menu
-          v-model:selectedKeys="['1']"
+          v-model:selectedKeys="selectedKeys"
           theme="dark"
           mode="horizontal"
           style="flex: 1; margin-left: 50px; min-width: 300px"
@@ -39,6 +39,9 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
+
+const selectedKeys = ref(['1'])
 </script>
 
 <style>

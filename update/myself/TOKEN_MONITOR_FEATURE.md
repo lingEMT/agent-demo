@@ -10,6 +10,9 @@
 **负责人**：Claude
 **状态**：已完成
 
+**修复记录**：
+- 2026-04-23 修复循环导入错误
+
 ---
 
 ## 🎯 优化目标
@@ -471,6 +474,79 @@ class MonitorableChatOpenAI(ChatOpenAI):
 ```python
 # 使用asyncio.create_task异步执行回调
 asyncio.create_task(callback.on_llm_end(response))
+```
+
+---
+
+### 问题3：循环导入错误
+
+**现象**：
+```
+ImportError: cannot import name 'get_monitored_llm' from 'app.services.llm_monitor'
+```
+
+**原因**：
+- `llm_service.py` 导入 `get_monitored_llm` 从 `llm_monitor.py`
+- `llm_monitor.py` 导入 `get_llm` 从 `llm_service.py`
+- 形成循环依赖
+
+**解决**：
+
+1. **修改 `llm_monitor.py`**：
+```python
+# 移除对 get_llm 的导入
+# from ..services.llm_service import get_llm
+
+# 添加自己的LLM创建逻辑
+class LLMMonitor:
+    @staticmethod
+    def _create_llm_instance() -> ChatOpenAI:
+        settings = get_settings()
+        api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or settings.openai_api_key
+        api_key_secret = SecretStr(api_key)
+        base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or settings.openai_base_url
+        model = os.getenv("LLM_MODEL_ID") or os.getenv("OPENAI_MODEL") or settings.openai_model
+
+        return ChatOpenAI(
+            api_key=api_key_secret,
+            base_url=base_url,
+            model=model,
+            temperature=0.7
+        )
+
+    @staticmethod
+    def get_monitored_llm(token_key: str) -> ChatOpenAI:
+        llm = LLMMonitor._create_llm_instance()
+        # ... 其他逻辑
+```
+
+2. **修改 `llm_service.py`**：
+```python
+# 导入 LLMMonitor 而不是 get_monitored_llm
+from .llm_monitor import LLMMonitor
+
+# 使用 LLMMonitor.get_monitored_llm()
+_llm_instance = LLMMonitor.get_monitored_llm(token_key or "default")
+```
+
+3. **修复 Pydantic 属性设置错误**：
+```python
+# MonitorableChatOpenAI 中使用实例变量
+def __init__(self, token_key: str, **kwargs):
+    super().__init__(**kwargs)
+    # 使用实例变量而不是属性
+    self._token_key = token_key
+
+# 添加属性访问器
+@property
+def token_key(self) -> str:
+    return self._token_key
+```
+
+**验证**：
+```bash
+python -c "from app.services.llm_service import get_llm; print('导入成功')"
+# 输出: LLM服务导入成功
 ```
 
 ---

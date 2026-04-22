@@ -10,10 +10,11 @@ from dotenv import load_dotenv
 # 首先尝试加载当前目录的.env
 load_dotenv()
 
-# 然后尝试加载HelloAgents的.env(如果存在)
-helloagents_env = Path(__file__).parent.parent.parent.parent / "HelloAgents" / ".env"
-if helloagents_env.exists():
-    load_dotenv(helloagents_env, override=False)  # 不覆盖已有的环境变量
+# 当前文件位置：backend/config.py
+env_path = Path(__file__).parent.parent / ".env"
+
+if env_path.exists():
+    load_dotenv(env_path, override=False)  # 不覆盖已有的环境变量
 
 
 class Settings(BaseSettings):
@@ -41,8 +42,8 @@ class Settings(BaseSettings):
 
     # LLM配置 (从环境变量读取,由HelloAgents管理)
     openai_api_key: str = ""
-    openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-4"
+    openai_base_url: str = ""
+    openai_model: str = ""
 
     # 日志配置
     log_level: str = "INFO"

@@ -89,7 +89,8 @@ class MonitorableChatOpenAI(ChatOpenAI):
 
     def __init__(self, token_key: str, **kwargs):
         super().__init__(**kwargs)
-        self.token_key = token_key
+        # 使用实例变量而不是属性，避免Pydantic错误
+        self._token_key = token_key
         self._callbacks = kwargs.get('callbacks', [])
 
         # 添加token使用监控回调
@@ -112,9 +113,19 @@ class MonitorableChatOpenAI(ChatOpenAI):
         """绑定工具时使用回调"""
         new_instance = super().bind_tools(tools, **kwargs)
         if isinstance(new_instance, MonitorableChatOpenAI):
-            new_instance.token_key = self.token_key
+            new_instance._token_key = self._token_key
             new_instance._callbacks = self._callbacks
         return new_instance
+
+    @property
+    def token_key(self) -> str:
+        """获取token_key"""
+        return self._token_key
+
+    @token_key.setter
+    def token_key(self, value: str):
+        """设置token_key"""
+        self._token_key = value
 
 
 class LLMMonitor:
