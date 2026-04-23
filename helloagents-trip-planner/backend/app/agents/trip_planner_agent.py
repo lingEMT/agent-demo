@@ -227,8 +227,8 @@ class MultiAgentTripPlanner:
         print("  - Agent创建完成")
 
     def _build_workflow(self) -> StateGraph:
-        """构建工作流图"""
-        print("  - 构建工作流...")
+        """构建工作流图 - 支持并行执行"""
+        print("  - 构建工作流（并行模式）...")
 
         workflow = StateGraph(TripPlanningState)
 
@@ -369,13 +369,19 @@ class MultiAgentTripPlanner:
         # 设置入口
         workflow.set_entry_point("attraction_search")
 
-        # 添加边 - 顺序执行
+        # 扇出结构：attraction_search 完成后同时启动天气和酒店查询
         workflow.add_edge("attraction_search", "weather_query")
-        workflow.add_edge("weather_query", "hotel_search")
+        workflow.add_edge("attraction_search", "hotel_search")
+
+        # 扇入结构：天气和酒店都完成后才进入规划节点
+        workflow.add_edge("weather_query", "planner")
         workflow.add_edge("hotel_search", "planner")
+
+        # 行程规划节点
         workflow.add_edge("planner", END)
 
         print(f"  - 工作流节点: {workflow.nodes}")
+        print(f"  - 执行模式: 并行（天气+酒店与景点并行）")
         return workflow
 
     async def plan_trip_async(self, request: TripRequest) -> TripPlan:
