@@ -73,12 +73,17 @@ async def search_poi(keywords: str, city: str, citylimit: bool = True) -> List[P
                     except:
                         pass
 
+                # Handle tel field - ensure it's a string or None
+                tel_value = poi_data.get("tel", "")
+                if isinstance(tel_value, list):
+                    tel_value = ""
+                
                 poi = POIInfo(
                     id=poi_data.get("id", ""),
                     name=poi_data.get("name", ""),
                     address=poi_data.get("address", ""),
                     location=Location(longitude=longitude, latitude=latitude),
-                    tel=poi_data.get("tel", ""),
+                    tel=tel_value,
                     type=poi_data.get("type", ""),
                 )
                 pois.append(poi)
@@ -105,14 +110,13 @@ async def get_weather(city: str) -> List[WeatherInfo]:
     client = get_http_client()
 
     try:
-        params = {"city": city, "extensions": "all"}
+        params = {"city": city, "extensions": "all", "key": settings.amap_app_code}
 
         # 后端HTTP API调用只使用AMAP_APP_CODE (Web服务API)
         # AMAP_API_KEY是WebJS服务密钥，用于前端地图展示，不应在后端使用
         response = await client.get(
             "https://restapi.amap.com/v3/weather/weatherInfo",
             params=params,
-            headers={"Authorization": f"APPCODE {settings.amap_app_code}"}
         )
 
         data = response.json()
@@ -182,7 +186,8 @@ async def plan_route(
 
         params = {
             "origin": origin_address,
-            "destination": destination_address
+            "destination": destination_address,
+            "key": settings.amap_app_code
         }
 
         if route_type == "transit":
@@ -201,7 +206,6 @@ async def plan_route(
         response = await client.get(
             api_url,
             params=params,
-            headers={"Authorization": f"APPCODE {settings.amap_app_code}"}
         )
 
         data = response.json()
