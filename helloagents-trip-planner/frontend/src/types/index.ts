@@ -93,3 +93,64 @@ export interface TripPlanResponse {
   data?: TripPlan
 }
 
+// ============ SSE流式响应类型 ============
+
+export interface SSEProgressData {
+  stage: string
+  progress: number
+  message: string
+}
+
+export interface SSEPartialResult {
+  type: 'attractions' | 'weather' | 'hotels'
+  content: string
+}
+
+export interface SSEErrorData {
+  error: string
+  code: string
+}
+
+export interface SSEFinalResult {
+  success: boolean
+  message: string
+  data?: TripPlan
+}
+
+export interface StreamCallbacks {
+  onProgress?: (data: SSEProgressData) => void
+  onPartialResult?: (data: SSEPartialResult) => void
+  onFinalResult?: (data: SSEFinalResult) => void
+  onError?: (data: SSEErrorData) => void
+}
+
+// ============ 历史记录类型 ============
+
+export interface TripRecordSummary {
+  id: string
+  title: string
+  city: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface TripRecordDetail extends TripRecordSummary {
+  request_data: TripFormData
+  plan_data: TripPlan | null
+}
+
+export interface SaveTripRequest {
+  session_id: string
+  title: string
+  request_data: string
+  plan_data?: string
+}
+
+export interface TripRecordListResponse {
+  success: boolean
+  data: TripRecordSummary[]
+  total: number
+  page: number
+  page_size: number
+}
+

@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from ..config import get_settings, validate_config, print_config
-from .routes import trip, poi, map as map_routes, token_monitor
+from .routes import trip, poi, map as map_routes, token_monitor, cache_admin, history
 from ..agents.trip_planner_agent import get_trip_planner_agent
+from ..services.cache_service import get_cache_service
 
 # 获取配置
 settings = get_settings()
@@ -37,6 +38,29 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[WARNING] Agent系统预初始化失败: {str(e)}")
 
+    # 初始化Redis缓存
+    print("\n[INFO] 初始化Redis缓存...")
+    try:
+        cache = get_cache_service()
+        await cache.init()
+        if cache.enabled:
+            print("[OK] Redis缓存初始化成功")
+        else:
+            print("[INFO] Redis缓存未启用（优雅降级模式）")
+    except Exception as e:
+        print(f"[WARNING] Redis缓存初始化异常: {e}")
+
+    # 初始化数据库
+    print("\n[INFO] 初始化数据库...")
+    try:
+        from ..core.database import init_db
+        await init_db()
+        print("[OK] 数据库初始化成功")
+    except Exception as e:
+        print(f"[WARNING] 数据库初始化失败: {e}")
+        import traceback
+        traceback.print_exc()
+
     print("\n" + "=" * 60)
     print("[DOCS] API文档: http://localhost:8000/docs")
     print("[REDOC] ReDoc文档: http://localhost:8000/redoc")
@@ -55,6 +79,22 @@ async def lifespan(app: FastAPI):
             await _multi_agent_planner.cleanup()
     except Exception as e:
         print(f"[WARNING] 清理Agent资源时出错: {str(e)}")
+
+    # 关闭Redis缓存连接
+    try:
+        cache = get_cache_service()
+        await cache.close()
+        print("[OK] Redis缓存连接已关闭")
+    except Exception as e:
+        print(f"[WARNING] 关闭Redis缓存时出错: {str(e)}")
+
+    # 关闭数据库连接
+    try:
+        from ..core.database import close_db
+        await close_db()
+        print("[OK] 数据库连接已关闭")
+    except Exception as e:
+        print(f"[WARNING] 关闭数据库连接时出错: {str(e)}")
 
     print("[EXIT] 应用正在关闭...")
     print("=" * 60 + "\n")
@@ -83,6 +123,8 @@ app.include_router(trip.router, prefix="/api")
 app.include_router(poi.router, prefix="/api")
 app.include_router(map_routes.router, prefix="/api")
 app.include_router(token_monitor.router, prefix="/api")
+app.include_router(cache_admin.router, prefix="/api")
+app.include_router(history.router, prefix="/api")
 
 @app.get("/")
 async def root():

@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 from langchain_core.tools import StructuredTool
 from ..config import get_settings
 from ..models.schemas import Location, POIInfo, WeatherInfo, RouteInfo
+from ..services.cache_service import CacheNamespace, CacheService, cached, get_cache_service
 import httpx
 
 
@@ -20,6 +21,7 @@ def get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
+@cached(namespace=CacheNamespace.POI_SEARCH)
 async def search_poi(keywords: str, city: str, citylimit: bool = True) -> List[POIInfo]:
     """
     搜索POI - 直接调用高德地图Web API
@@ -96,6 +98,7 @@ async def search_poi(keywords: str, city: str, citylimit: bool = True) -> List[P
         return _get_mock_pois(keywords, city)
 
 
+@cached(namespace=CacheNamespace.WEATHER)
 async def get_weather(city: str) -> List[WeatherInfo]:
     """
     查询天气 - 直接调用高德地图Web API
@@ -152,6 +155,28 @@ async def get_weather(city: str) -> List[WeatherInfo]:
         return _get_mock_weather(city)
 
 
+def _build_route_key(
+    origin_address: str,
+    destination_address: str,
+    origin_city: Optional[str] = None,
+    destination_city: Optional[str] = None,
+    route_type: str = "walking",
+) -> str:
+    """为plan_route构建缓存key（包含所有参数）"""
+    raw = json.dumps({
+        "origin": origin_address,
+        "destination": destination_address,
+        "origin_city": origin_city,
+        "dest_city": destination_city,
+        "type": route_type,
+    }, sort_keys=True)
+    return CacheService._md5(raw)
+
+
+@cached(
+    namespace=CacheNamespace.ROUTE,
+    key_builder=_build_route_key,
+)
 async def plan_route(
     origin_address: str,
     destination_address: str,
@@ -400,7 +425,10 @@ class AmapService:
 
     async def get_poi_detail(self, poi_id: str) -> Optional[dict]:
         """
-        获取POI详情 - 使用HTTP API
+        获取POI详情 - 使用HTTP API（带Redis缓存）
+
+        缓存key: trip_planner:amap:poi_detail:{poi_id}
+        缓存TTL: 24小时
 
         Args:
             poi_id: POI ID
@@ -408,6 +436,21 @@ class AmapService:
         Returns:
             POI详情数据
         """
+        cache = get_cache_service()
+        if cache.enabled:
+            cached_result = await cache.get(CacheNamespace.POI_DETAIL, poi_id)
+            if cached_result is not None:
+                return cached_result
+
+        result = await self._fetch_poi_detail(poi_id)
+
+        if result is not None and cache.enabled:
+            await cache.set(CacheNamespace.POI_DETAIL, poi_id, result)
+
+        return result
+
+    async def _fetch_poi_detail(self, poi_id: str) -> Optional[dict]:
+        """实际的POI详情API调用"""
         settings = get_settings()
         client = get_http_client()
 
@@ -417,8 +460,6 @@ class AmapService:
                 "extensions": "base"
             }
 
-            # 后端HTTP API调用只使用AMAP_APP_CODE (Web服务API)
-            # AMAP_API_KEY是WebJS服务密钥，用于前端地图展示，不应在后端使用
             response = await client.get(
                 "https://restapi.amap.com/v3/place/detail",
                 params=params,
@@ -468,7 +509,10 @@ class AmapService:
 
     async def geocode(self, address: str, city: Optional[str] = None) -> Optional[Location]:
         """
-        地理编码(地址转坐标) - 使用HTTP API
+        地理编码(地址转坐标) - 使用HTTP API（带Redis缓存）
+
+        缓存key: trip_planner:amap:geocode:{md5(address+city)}
+        缓存TTL: 7天（地址到坐标的映射几乎不变）
 
         Args:
             address: 地址
@@ -477,6 +521,27 @@ class AmapService:
         Returns:
             经纬度坐标
         """
+        raw = json.dumps({"address": address, "city": city}, sort_keys=True)
+        cache_key = CacheService._md5(raw)
+
+        cache = get_cache_service()
+        if cache.enabled:
+            cached_result = await cache.get(CacheNamespace.GEOCODE, cache_key)
+            if cached_result is not None:
+                return Location(**cached_result)
+
+        result = await self._fetch_geocode(address, city)
+
+        if result is not None and cache.enabled:
+            await cache.set(
+                CacheNamespace.GEOCODE, cache_key,
+                {"longitude": result.longitude, "latitude": result.latitude},
+            )
+
+        return result
+
+    async def _fetch_geocode(self, address: str, city: Optional[str] = None) -> Optional[Location]:
+        """实际的地理编码API调用"""
         settings = get_settings()
         client = get_http_client()
 
@@ -485,8 +550,6 @@ class AmapService:
             if city:
                 params["city"] = city
 
-            # 后端HTTP API调用只使用AMAP_APP_CODE (Web服务API)
-            # AMAP_API_KEY是WebJS服务密钥，用于前端地图展示，不应在后端使用
             response = await client.get(
                 "https://restapi.amap.com/v3/geocode/geo",
                 params=params,

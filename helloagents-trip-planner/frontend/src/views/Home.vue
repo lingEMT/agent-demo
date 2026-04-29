@@ -204,10 +204,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { generateTripPlan } from '@/services/api'
+import { generateTripPlanStream, saveTripRecord } from '@/services/api'
 import type { TripFormData } from '@/types'
 import type { Dayjs } from 'dayjs'
 
@@ -215,6 +215,29 @@ const router = useRouter()
 const loading = ref(false)
 const loadingProgress = ref(0)
 const loadingStatus = ref('')
+const partialResults = ref<Record<string, string>>({})
+const sessionId = ref('')
+
+// 生成/获取 session_id
+const getOrCreateSessionId = (): string => {
+  let sid = localStorage.getItem('trip_session_id')
+  if (!sid) {
+    sid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0
+      const v = c === 'x' ? r : (r & 0x3) | 0x8
+      return v.toString(16)
+    })
+    localStorage.setItem('trip_session_id', sid)
+  }
+  return sid
+}
+
+onMounted(() => {
+  sessionId.value = getOrCreateSessionId()
+})
+
+// 支持取消请求
+const abortController = ref<AbortController | null>(null)
 
 const formData = reactive<TripFormData & { start_date: Dayjs | null; end_date: Dayjs | null }>({
   city: '',
@@ -243,6 +266,23 @@ watch([() => formData.start_date, () => formData.end_date], ([start, end]) => {
   }
 })
 
+// 将stage映射为友好的状态文本
+const getStageMessage = (stage: string): string => {
+  const stageMessages: Record<string, string> = {
+    'init': '正在初始化系统...',
+    'build_workflow': '正在构建工作流...',
+    'attraction_search': '🔍 正在搜索景点...',
+    'weather_query': '🌤️ 正在查询天气...',
+    'hotel_search': '🏨 正在搜索酒店...',
+    'weather_done': '🌤️ 天气查询完成',
+    'hotel_done': '🏨 酒店搜索完成',
+    'planning': '📋 正在生成行程计划...',
+    'parsing': '📋 正在解析结果...',
+    'complete': '✅ 完成!'
+  }
+  return stageMessages[stage] || `⏳ ${stage}...`
+}
+
 const handleSubmit = async () => {
   if (!formData.start_date || !formData.end_date) {
     message.error('请选择日期')
@@ -252,24 +292,10 @@ const handleSubmit = async () => {
   loading.value = true
   loadingProgress.value = 0
   loadingStatus.value = '正在初始化...'
+  partialResults.value = {}
 
-  // 模拟进度更新
-  const progressInterval = setInterval(() => {
-    if (loadingProgress.value < 90) {
-      loadingProgress.value += 10
-
-      // 更新状态文本
-      if (loadingProgress.value <= 30) {
-        loadingStatus.value = '🔍 正在搜索景点...'
-      } else if (loadingProgress.value <= 50) {
-        loadingStatus.value = '🌤️ 正在查询天气...'
-      } else if (loadingProgress.value <= 70) {
-        loadingStatus.value = '🏨 正在推荐酒店...'
-      } else {
-        loadingStatus.value = '📋 正在生成行程计划...'
-      }
-    }
-  }, 500)
+  // 创建AbortController用于取消请求
+  abortController.value = new AbortController()
 
   try {
     const requestData: TripFormData = {
@@ -283,33 +309,63 @@ const handleSubmit = async () => {
       free_text_input: formData.free_text_input
     }
 
-    const response = await generateTripPlan(requestData)
+    await generateTripPlanStream(
+      requestData,
+      {
+        onProgress: (data) => {
+          loadingProgress.value = data.progress
+          loadingStatus.value = getStageMessage(data.stage)
+        },
+        onPartialResult: (data) => {
+          partialResults.value[data.type] = data.content
+        },
+        onFinalResult: (data) => {
+          loadingProgress.value = 100
+          loadingStatus.value = '✅ 完成!'
 
-    clearInterval(progressInterval)
-    loadingProgress.value = 100
-    loadingStatus.value = '✅ 完成!'
+          if (data.success && data.data) {
+            sessionStorage.setItem('tripPlan', JSON.stringify(data.data))
+            message.success('旅行计划生成成功!')
 
-    if (response.success && response.data) {
-      // 保存到sessionStorage
-      sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
+            // Fire-and-forget 保存到数据库
+            const title = `${requestData.city}${requestData.travel_days}日游`
+            saveTripRecord({
+              session_id: sessionId.value,
+              title,
+              request_data: JSON.stringify(requestData),
+              plan_data: JSON.stringify(data.data),
+            }).catch((err) => {
+              // 静默处理，不影响用户体验
+              console.warn('保存历史记录失败（不影响使用）:', err)
+            })
 
-      message.success('旅行计划生成成功!')
-
-      // 短暂延迟后跳转
-      setTimeout(() => {
-        router.push('/result')
-      }, 500)
-    } else {
-      message.error(response.message || '生成失败')
-    }
+            setTimeout(() => {
+              router.push('/result')
+            }, 500)
+          } else {
+            message.error(data.message || '生成失败')
+          }
+        },
+        onError: (data) => {
+          console.error('SSE错误:', data)
+          message.error(data.error || '生成旅行计划失败,请稍后重试')
+        }
+      },
+      abortController.value.signal
+    )
   } catch (error: any) {
-    clearInterval(progressInterval)
+    if (error.name === 'AbortError') {
+      console.log('请求已取消')
+      return
+    }
+    console.error('生成旅行计划失败:', error)
     message.error(error.message || '生成旅行计划失败,请稍后重试')
   } finally {
     setTimeout(() => {
       loading.value = false
       loadingProgress.value = 0
       loadingStatus.value = ''
+      abortController.value = null
     }, 1000)
   }
 }

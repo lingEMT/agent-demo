@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from typing import List
+from pydantic import Field
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
@@ -44,6 +45,27 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = ""
     llm_model: str = ""
+
+    # ================= Redis缓存配置 =================
+    # Redis连接配置
+    redis_host: str = ""
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: str = ""
+
+    # Redis前缀（用于区分不同应用的缓存key）
+    redis_prefix: str = "trip_planner"
+
+    # 缓存总开关
+    redis_enabled: bool = True
+
+    # ================= 数据库持久化配置 =================
+    # 使用 TRIP_DB_URL 避免与系统 DATABASE_URL 环境变量冲突
+    database_url: str = Field(
+        default="sqlite+aiosqlite:///./data/trip_planner.db",
+        alias="TRIP_DB_URL",
+    )
+    database_auto_create: bool = True
 
     # 日志配置
     log_level: str = "INFO"

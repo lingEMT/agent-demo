@@ -1,7 +1,7 @@
 """多智能体旅行规划系统 - 使用LangChain/LangGraph"""
 
 import json
-from typing import Dict, Any, TypedDict, Annotated, Sequence
+from typing import Dict, Any, AsyncGenerator, TypedDict, Annotated, Sequence
 from langchain_core.messages import HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt.chat_agent_executor import create_tool_calling_executor
@@ -459,6 +459,110 @@ class MultiAgentTripPlanner:
             import traceback
             traceback.print_exc()
             return self._create_fallback_plan(request)
+
+    async def plan_trip_stream(self, request: TripRequest) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        使用多智能体协作流式生成旅行计划，逐个节点产生SSE事件
+
+        Args:
+            request: 旅行请求
+
+        Yields:
+            事件字典: {"event": event_type, "data": data_dict}
+        """
+        try:
+            print(f"\n{'='*60}")
+            print(f"🚀 开始多智能体协作流式规划旅行 (LangGraph)...")
+            print(f"目的地: {request.city}")
+            print(f"日期: {request.start_date} 至 {request.end_date}")
+            print(f"天数: {request.travel_days}天")
+            print(f"{'='*60}\n")
+
+            # 初始化Agent
+            yield {"event": "progress", "data": {"stage": "init", "progress": 5, "message": "正在初始化系统..."}}
+            await self._init_agents()
+
+            # 检查 agents 是否初始化
+            if self.attraction_agent is None:
+                yield {"event": "error", "data": {"error": "Agent初始化失败", "code": "INIT_ERROR"}}
+                return
+
+            # 构建工作流
+            yield {"event": "progress", "data": {"stage": "build_workflow", "progress": 10, "message": "正在构建工作流..."}}
+            workflow = self._build_workflow()
+            app = workflow.compile()
+
+            # 准备初始状态
+            initial_state = {
+                "messages": [],
+                "request": request.model_dump(),
+                "attraction_result": "",
+                "weather_result": "",
+                "hotel_result": "",
+                "final_plan": ""
+            }
+
+            # 发送进度：开始景点搜索
+            yield {"event": "progress", "data": {"stage": "attraction_search", "progress": 20, "message": "正在搜索景点..."}}
+            print("[STEP 1] 搜索景点...")
+
+            final_state = {}
+
+            # 使用astream流式执行，stream_mode="updates"产生每节点完成事件
+            async for event in app.astream(initial_state, stream_mode="updates"):
+                for node_name, state_update in event.items():
+                    final_state.update(state_update)
+
+                    if node_name == "attraction_search":
+                        content = state_update.get("attraction_result", "")
+                        yield {"event": "partial_result", "data": {"type": "attractions", "content": content}}
+                        # 景点搜索完成后，通知即将并行执行天气和酒店查询
+                        yield {"event": "progress", "data": {"stage": "weather_query", "progress": 40, "message": "正在查询天气..."}}
+                        yield {"event": "progress", "data": {"stage": "hotel_search", "progress": 50, "message": "正在搜索酒店..."}}
+
+                    elif node_name == "weather_query":
+                        content = state_update.get("weather_result", "")
+                        yield {"event": "partial_result", "data": {"type": "weather", "content": content}}
+                        yield {"event": "progress", "data": {"stage": "weather_done", "progress": 60, "message": "天气查询完成"}}
+
+                    elif node_name == "hotel_search":
+                        content = state_update.get("hotel_result", "")
+                        yield {"event": "partial_result", "data": {"type": "hotels", "content": content}}
+                        yield {"event": "progress", "data": {"stage": "hotel_done", "progress": 70, "message": "酒店搜索完成"}}
+
+                    elif node_name == "planner":
+                        yield {"event": "progress", "data": {"stage": "planning", "progress": 85, "message": "正在生成行程计划..."}}
+                        print("[STEP 4] 生成行程计划...")
+
+            # 所有节点完成，解析最终计划
+            yield {"event": "progress", "data": {"stage": "parsing", "progress": 95, "message": "正在解析结果..."}}
+
+            final_plan_str = final_state.get("final_plan", "")
+            if final_plan_str and final_plan_str != f"错误:" and not final_plan_str.startswith("错误"):
+                trip_plan = self._parse_response(final_plan_str, request)
+                yield {"event": "progress", "data": {"stage": "complete", "progress": 100, "message": "完成!"}}
+                yield {"event": "final_result", "data": {"success": True, "message": "旅行计划生成成功", "data": trip_plan.model_dump()}}
+                print(f"\n{'='*60}")
+                print(f"✅ 旅行计划流式生成完成!")
+                print(f"{'='*60}\n")
+            else:
+                print(f"[WARN] 最终计划为空，使用备用方案")
+                trip_plan = self._create_fallback_plan(request)
+                yield {"event": "progress", "data": {"stage": "complete", "progress": 100, "message": "完成!"}}
+                yield {"event": "final_result", "data": {"success": True, "message": "旅行计划已生成(备用方案)", "data": trip_plan.model_dump()}}
+
+        except Exception as e:
+            print(f"[ERROR] 流式生成旅行计划失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # 返回错误事件
+            yield {"event": "error", "data": {"error": f"生成旅行计划失败: {str(e)}", "code": "SYSTEM_ERROR"}}
+            # 尝试返回备用计划
+            try:
+                fallback_plan = self._create_fallback_plan(request)
+                yield {"event": "final_result", "data": {"success": True, "message": "已生成备用旅行计划", "data": fallback_plan.model_dump()}}
+            except:
+                pass
 
     def plan_trip(self, request: TripRequest) -> TripPlan:
         """

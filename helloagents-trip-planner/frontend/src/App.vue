@@ -26,6 +26,11 @@
               Token监控
             </router-link>
           </a-menu-item>
+          <a-menu-item key="4">
+            <router-link to="/history" style="color: white; text-decoration: none;">
+              历史记录
+            </router-link>
+          </a-menu-item>
         </a-menu>
       </a-layout-header>
       <a-layout-content style="padding: 24px">

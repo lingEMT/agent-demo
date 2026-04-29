@@ -49,6 +49,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# 数据库
+helloagents-trip-planner/backend/data/
+
 # 其他
 .claude
 agent.iml

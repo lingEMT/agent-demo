@@ -6,6 +6,7 @@ import App from './App.vue'
 import Home from './views/Home.vue'
 import Result from './views/Result.vue'
 import TokenMonitor from './views/TokenMonitor.vue'
+import History from './views/History.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -24,6 +25,11 @@ const router = createRouter({
       path: '/token-monitor',
       name: 'TokenMonitor',
       component: TokenMonitor
+    },
+    {
+      path: '/history',
+      name: 'History',
+      component: History
     }
   ]
 })
