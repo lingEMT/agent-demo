@@ -2,132 +2,18 @@
 
 import json
 from typing import Dict, Any, AsyncGenerator, TypedDict, Annotated, Sequence
+
 from langchain_core.messages import HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt.chat_agent_executor import create_tool_calling_executor
 
 from ..services.llm_service import get_llm
 from ..models.schemas import TripRequest, TripPlan, DayPlan, Attraction, Meal, Location
 from ..config import get_settings
 from ..services.amap_service import create_amap_tools
+from ..services.conversation_service import get_conversation_service
+from ..services.history_service import get_history_service
+from .skills import AttractionSkill, WeatherSkill, HotelSkill, PlannerSkill
 import operator
-
-# ============ Agent提示词 ============
-
-ATTRACTION_AGENT_PROMPT = """你是景点搜索专家。你的任务是根据城市和用户偏好搜索合适的景点。
-
-**重要提示:**
-你必须使用工具来搜索景点!不要自己编造景点信息!
-
-**工具调用:**
-使用 search_poi 工具搜索景点。
-
-**注意:**
-1. 必须使用工具,不要直接回答
-2. 返回真实的景点信息
-3. 包括景点名称、地址、位置坐标等
-"""
-
-WEATHER_AGENT_PROMPT = """你是天气查询专家。你的任务是查询指定城市的天气信息。
-
-**重要提示:**
-你必须使用工具来查询天气!不要自己编造天气信息!
-
-**工具调用:**
-使用 get_weather 工具查询天气。
-
-**注意:**
-1. 必须使用工具,不要直接回答
-2. 返回准确的天气信息
-"""
-
-HOTEL_AGENT_PROMPT = """你是酒店推荐专家。你的任务是根据城市和景点位置推荐合适的酒店。
-
-**重要提示:**
-你必须使用工具来搜索酒店!不要自己编造酒店信息!
-
-**工具调用:**
-使用 search_poi 工具搜索酒店,关键词使用"酒店"或"宾馆"。
-
-**注意:**
-1. 必须使用工具,不要直接回答
-2. 返回真实的酒店信息
-"""
-
-PLANNER_AGENT_PROMPT = """你是行程规划专家。你的任务是根据景点信息和天气信息,生成详细的旅行计划。
-
-请严格按照以下JSON格式返回旅行计划:
-```json
-{
-  "city": "城市名称",
-  "start_date": "YYYY-MM-DD",
-  "end_date": "YYYY-MM-DD",
-  "days": [
-    {
-      "date": "YYYY-MM-DD",
-      "day_index": 0,
-      "description": "第1天行程概述",
-      "transportation": "交通方式",
-      "accommodation": "住宿类型",
-      "hotel": {
-        "name": "酒店名称",
-        "address": "酒店地址",
-        "location": {"longitude": 116.397128, "latitude": 39.916527},
-        "price_range": "300-500元",
-        "rating": "4.5",
-        "distance": "距离景点2公里",
-        "type": "经济型酒店",
-        "estimated_cost": 400
-      },
-      "attractions": [
-        {
-          "name": "景点名称",
-          "address": "详细地址",
-          "location": {"longitude": 116.397128, "latitude": 39.916527},
-          "visit_duration": 120,
-          "description": "景点详细描述",
-          "category": "景点类别",
-          "ticket_price": 60
-        }
-      ],
-      "meals": [
-        {"type": "breakfast", "name": "早餐推荐", "description": "早餐描述", "estimated_cost": 30},
-        {"type": "lunch", "name": "午餐推荐", "description": "午餐描述", "estimated_cost": 50},
-        {"type": "dinner", "name": "晚餐推荐", "description": "晚餐描述", "estimated_cost": 80}
-      ]
-    }
-  ],
-  "weather_info": [
-    {
-      "date": "YYYY-MM-DD",
-      "day_weather": "晴",
-      "night_weather": "多云",
-      "day_temp": 25,
-      "night_temp": 15,
-      "wind_direction": "南风",
-      "wind_power": "1-3级"
-    }
-  ],
-  "overall_suggestions": "总体建议",
-  "budget": {
-    "total_attractions": 180,
-    "total_hotels": 1200,
-    "total_meals": 480,
-    "total_transportation": 200,
-    "total": 2060
-  }
-}
-```
-
-**重要提示:**
-1. weather_info数组必须包含每一天的天气信息
-2. 温度必须是纯数字(不要带°C等单位)
-3. 每天安排2-3个景点
-4. 考虑景点之间的距离和游览时间
-5. 每天必须包含早中晚三餐
-6. 提供实用的旅行建议
-7. **必须包含预算信息**
-"""
 
 
 # ============ 状态定义 ============
@@ -139,7 +25,7 @@ class TripPlanningState(TypedDict):
     attraction_result: str
     weather_result: str
     hotel_result: str
-    final_plan: str
+    final_plan: Any  # TripPlan dict (structured) or str (fallback)
 
 
 # ============ 多智能体系统 ============
@@ -160,14 +46,14 @@ class MultiAgentTripPlanner:
             self.langchain_tools = create_amap_tools()
             print(f"[OK] 创建了 {len(self.langchain_tools)} 个工具")
 
-            # Agent将在运行时创建
-            self.attraction_agent = None
-            self.weather_agent = None
-            self.hotel_agent = None
-            self.planner_agent = None
+            # 技能实例（延迟初始化）
+            self.attraction_skill = None
+            self.weather_skill = None
+            self.hotel_skill = None
+            self.planner_skill = None
 
-            # 工作流图
-            self.workflow = None
+            # 已编译的工作流（缓存避免重复编译）
+            self._compiled_workflow = None
 
             print(f"[OK] 多智能体系统框架初始化成功")
 
@@ -178,80 +64,36 @@ class MultiAgentTripPlanner:
             raise
 
     def should_reset(self) -> bool:
-        """检查是否需要重置 Agent 实例"""
-        # 检查 Agent 是否已初始化
-        if self.attraction_agent is None or not self.attraction_agent:
-            print("[INFO] 检测到 Agent 未初始化或实例为空，需要重置")
-            return True
+        """检查是否需要重置（技能实例是否已初始化）"""
+        return self.attraction_skill is None
 
-        # 检查 Agent 的类型是否正确
-        from langgraph.graph.state import CompiledStateGraph
-        if not isinstance(self.attraction_agent, CompiledStateGraph):
-            print("[INFO] 检测到 Agent 类型不正确，需要重置")
-            return True
+    async def _ensure_skills(self):
+        """确保所有技能实例已初始化"""
+        if self.attraction_skill is not None:
+            return
+        print("  - 初始化技能实例...")
+        self.attraction_skill = AttractionSkill(self.llm, self.langchain_tools)
+        self.weather_skill = WeatherSkill(self.llm, self.langchain_tools)
+        self.hotel_skill = HotelSkill(self.llm, self.langchain_tools)
+        self.planner_skill = PlannerSkill(self.llm)
+        print("  - 技能实例初始化完成")
 
-        return False
+    def _get_compiled_workflow(self):
+        """构建并编译工作流图（缓存编译结果，避免重复编译）"""
+        if self._compiled_workflow is not None:
+            return self._compiled_workflow
 
-    async def _init_agents(self):
-        """初始化所有Agent"""
-        print("  - 创建Agent...")
-
-        # 创建景点搜索Agent
-        self.attraction_agent = create_tool_calling_executor(
-            model=self.llm,
-            tools=self.langchain_tools,
-            prompt=ATTRACTION_AGENT_PROMPT
-        )
-
-        # 创建天气查询Agent
-        self.weather_agent = create_tool_calling_executor(
-            model=self.llm,
-            tools=self.langchain_tools,
-            prompt=WEATHER_AGENT_PROMPT
-        )
-
-        # 创建酒店推荐Agent
-        self.hotel_agent = create_tool_calling_executor(
-            model=self.llm,
-            tools=self.langchain_tools,
-            prompt=HOTEL_AGENT_PROMPT
-        )
-
-        # 创建行程规划Agent (不需要工具)
-        self.planner_agent = create_tool_calling_executor(
-            model=self.llm,
-            tools=[],
-            prompt=PLANNER_AGENT_PROMPT
-        )
-
-        print("  - Agent创建完成")
-
-    def _build_workflow(self) -> StateGraph:
-        """构建工作流图 - 支持并行执行"""
         print("  - 构建工作流（并行模式）...")
 
         workflow = StateGraph(TripPlanningState)
 
-        # 定义节点
+        # ========== 定义工作流节点 ==========
+
         async def attraction_node(state: TripPlanningState) -> Dict:
             """景点搜索节点"""
             print("    [节点] 搜索景点...")
             try:
-                request = state["request"]
-                keywords = request.get("preferences", ["景点"])[0] if request.get("preferences") else "景点"
-                city = request.get("city", "北京")
-
-                query = f"请搜索{city}的{keywords}相关景点"
-
-                print(f"      查询: {query}")
-
-                result = await self.attraction_agent.ainvoke({
-                    "messages": [HumanMessage(content=query)]
-                })
-
-                print(f"      Agent响应: {len(result.get('messages', []))} 条消息")
-
-                response = result["messages"][-1].content
+                response = await self.attraction_skill.execute(state["request"])
                 return {"attraction_result": response}
             except Exception as e:
                 print(f"      [ERROR] 景点搜索失败: {str(e)}")
@@ -263,20 +105,7 @@ class MultiAgentTripPlanner:
             """天气查询节点"""
             print("    [节点] 查询天气...")
             try:
-                request = state["request"]
-                city = request.get("city", "北京")
-
-                query = f"请查询{city}的天气信息"
-
-                print(f"      查询: {query}")
-
-                result = await self.weather_agent.ainvoke({
-                    "messages": [HumanMessage(content=query)]
-                })
-
-                print(f"      Agent响应: {len(result.get('messages', []))} 条消息")
-
-                response = result["messages"][-1].content
+                response = await self.weather_skill.execute(state["request"])
                 return {"weather_result": response}
             except Exception as e:
                 print(f"      [ERROR] 天气查询失败: {str(e)}")
@@ -288,21 +117,7 @@ class MultiAgentTripPlanner:
             """酒店推荐节点"""
             print("    [节点] 搜索酒店...")
             try:
-                request = state["request"]
-                city = request.get("city", "北京")
-                accommodation = request.get("accommodation", "经济型")
-
-                query = f"请搜索{city}的{accommodation}酒店"
-
-                print(f"      查询: {query}")
-
-                result = await self.hotel_agent.ainvoke({
-                    "messages": [HumanMessage(content=query)]
-                })
-
-                print(f"      Agent响应: {len(result.get('messages', []))} 条消息")
-
-                response = result["messages"][-1].content
+                response = await self.hotel_skill.execute(state["request"])
                 return {"hotel_result": response}
             except Exception as e:
                 print(f"      [ERROR] 酒店搜索失败: {str(e)}")
@@ -311,54 +126,21 @@ class MultiAgentTripPlanner:
                 return {"hotel_result": f"错误: {str(e)}"}
 
         async def planner_node(state: TripPlanningState) -> Dict:
-            """行程规划节点"""
-            print("    [节点] 生成行程计划...")
+            """行程规划节点 - 使用结构化输出"""
+            print("    [节点] 生成行程计划（结构化输出）...")
             try:
-                request = state["request"]
-
-                query = f"""请根据以下信息生成{request.get('city', '北京')}的{request.get('travel_days', 3)}天旅行计划:
-
-**基本信息:**
-- 城市: {request.get('city', '北京')}
-- 日期: {request.get('start_date', '')} 至 {request.get('end_date', '')}
-- 天数: {request.get('travel_days', 3)}天
-- 交通方式: {request.get('transportation', '公共交通')}
-- 住宿: {request.get('accommodation', '经济型')}
-- 偏好: {', '.join(request.get('preferences', [])) if request.get('preferences') else '无'}
-
-**景点信息:**
-{state['attraction_result']}
-
-**天气信息:**
-{state['weather_result']}
-
-**酒店信息:**
-{state['hotel_result']}
-
-**要求:**
-1. 每天安排2-3个景点
-2. 每天必须包含早中晚三餐
-3. 每天推荐一个具体的酒店
-4. 考虑景点之间的距离和交通方式
-5. 返回完整的JSON格式数据
-"""
-
-                if request.get('free_text_input'):
-                    query += f"\n**额外要求:** {request.get('free_text_input')}"
-
-                result = await self.planner_agent.ainvoke({
-                    "messages": [HumanMessage(content=query)]
-                })
-
-                print(f"      Agent响应: {len(result.get('messages', []))} 条消息")
-
-                response = result["messages"][-1].content
-                return {"final_plan": response}
+                plan_dict = await self.planner_skill.execute_structured(state["request"], state)
+                return {"final_plan": plan_dict}
             except Exception as e:
-                print(f"      [ERROR] 行程规划失败: {str(e)}")
+                print(f"      [WARN] 结构化输出失败，回退到文本解析: {str(e)}")
                 import traceback
                 traceback.print_exc()
-                return {"final_plan": f"错误: {str(e)}"}
+                try:
+                    response = await self.planner_skill.execute_fallback(state["request"], state)
+                    return {"final_plan": response}
+                except Exception as fallback_err:
+                    print(f"      [ERROR] 回退规划也失败: {str(fallback_err)}")
+                    return {"final_plan": f"错误: {str(fallback_err)}"}
 
         # 添加节点
         workflow.add_node("attraction_search", attraction_node)
@@ -377,12 +159,13 @@ class MultiAgentTripPlanner:
         workflow.add_edge("weather_query", "planner")
         workflow.add_edge("hotel_search", "planner")
 
-        # 行程规划节点
         workflow.add_edge("planner", END)
 
         print(f"  - 工作流节点: {workflow.nodes}")
         print(f"  - 执行模式: 并行（天气+酒店与景点并行）")
-        return workflow
+
+        self._compiled_workflow = workflow.compile()
+        return self._compiled_workflow
 
     async def plan_trip_async(self, request: TripRequest) -> TripPlan:
         """
@@ -396,33 +179,18 @@ class MultiAgentTripPlanner:
         """
         try:
             print(f"\n{'='*60}")
-            print(f"🚀 开始多智能体协作规划旅行 (LangGraph)...")
+            print(f"[开始] 多智能体协作规划旅行 (LangGraph)")
             print(f"目的地: {request.city}")
             print(f"日期: {request.start_date} 至 {request.end_date}")
             print(f"天数: {request.travel_days}天")
             print(f"偏好: {', '.join(request.preferences) if request.preferences else '无'}")
             print(f"{'='*60}\n")
 
-            # 初始化Agent
-            print("初始化 agents...")
-            await self._init_agents()
+            # 确保技能已初始化
+            await self._ensure_skills()
 
-            # 检查 agents 是否初始化
-            if self.attraction_agent is None:
-                print("[ERROR] Agent 初始化失败，返回备用计划")
-                return self._create_fallback_plan(request)
-
-            print(f"attraction_agent: {type(self.attraction_agent)}")
-            print(f"weather_agent: {type(self.weather_agent)}")
-            print(f"hotel_agent: {type(self.hotel_agent)}")
-            print(f"planner_agent: {type(self.planner_agent)}")
-
-            # 构建工作流
-            print("构建工作流...")
-            workflow = self._build_workflow()
-            print(f"Workflow nodes: {workflow.nodes}")
-
-            app = workflow.compile()
+            # 获取已编译的工作流
+            app = self._get_compiled_workflow()
 
             # 准备初始状态
             initial_state = {
@@ -434,7 +202,6 @@ class MultiAgentTripPlanner:
                 "final_plan": ""
             }
 
-            # 运行工作流
             print("[STEP 1] 搜索景点...")
             print("[STEP 2] 查询天气...")
             print("[STEP 3] 搜索酒店...")
@@ -443,13 +210,20 @@ class MultiAgentTripPlanner:
             result = await app.ainvoke(initial_state)
 
             # 解析最终计划
-            final_plan = result.get("final_plan", "")
-            print(f"\n行程规划结果: {final_plan[:300]}...\n")
-
-            trip_plan = self._parse_response(final_plan, request)
+            raw_plan = result.get("final_plan", "")
+            if isinstance(raw_plan, dict):
+                # 结构化输出路径：直接从 dict 构造 TripPlan
+                trip_plan = TripPlan(**raw_plan)
+                print(f"\n[OK] 结构化输出成功: {trip_plan.city} {len(trip_plan.days)}天\n")
+            elif isinstance(raw_plan, str) and raw_plan and not raw_plan.startswith("错误"):
+                # 传统文本解析路径（回退）
+                trip_plan = self._parse_response(raw_plan, request)
+            else:
+                print(f"\n[WARN] 最终计划无效，使用备用方案\n")
+                trip_plan = self._create_fallback_plan(request)
 
             print(f"{'='*60}")
-            print(f"✅ 旅行计划生成完成!")
+            print(f"[完成] 旅行计划生成成功!")
             print(f"{'='*60}\n")
 
             return trip_plan
@@ -460,37 +234,34 @@ class MultiAgentTripPlanner:
             traceback.print_exc()
             return self._create_fallback_plan(request)
 
-    async def plan_trip_stream(self, request: TripRequest) -> AsyncGenerator[Dict[str, Any], None]:
+    async def plan_trip_stream(self, request: TripRequest, session_id: str = "") -> AsyncGenerator[Dict[str, Any], None]:
         """
         使用多智能体协作流式生成旅行计划，逐个节点产生SSE事件
 
         Args:
             request: 旅行请求
+            session_id: 前端会话ID（用于对话记忆）
 
         Yields:
             事件字典: {"event": event_type, "data": data_dict}
         """
+        plan_id = ""
+        conversation_id = ""
         try:
             print(f"\n{'='*60}")
-            print(f"🚀 开始多智能体协作流式规划旅行 (LangGraph)...")
+            print(f"[开始] 多智能体协作流式规划旅行 (LangGraph)")
             print(f"目的地: {request.city}")
             print(f"日期: {request.start_date} 至 {request.end_date}")
             print(f"天数: {request.travel_days}天")
             print(f"{'='*60}\n")
 
-            # 初始化Agent
+            # 初始化技能
             yield {"event": "progress", "data": {"stage": "init", "progress": 5, "message": "正在初始化系统..."}}
-            await self._init_agents()
+            await self._ensure_skills()
 
-            # 检查 agents 是否初始化
-            if self.attraction_agent is None:
-                yield {"event": "error", "data": {"error": "Agent初始化失败", "code": "INIT_ERROR"}}
-                return
-
-            # 构建工作流
+            # 获取已编译的工作流
             yield {"event": "progress", "data": {"stage": "build_workflow", "progress": 10, "message": "正在构建工作流..."}}
-            workflow = self._build_workflow()
-            app = workflow.compile()
+            app = self._get_compiled_workflow()
 
             # 准备初始状态
             initial_state = {
@@ -516,7 +287,6 @@ class MultiAgentTripPlanner:
                     if node_name == "attraction_search":
                         content = state_update.get("attraction_result", "")
                         yield {"event": "partial_result", "data": {"type": "attractions", "content": content}}
-                        # 景点搜索完成后，通知即将并行执行天气和酒店查询
                         yield {"event": "progress", "data": {"stage": "weather_query", "progress": 40, "message": "正在查询天气..."}}
                         yield {"event": "progress", "data": {"stage": "hotel_search", "progress": 50, "message": "正在搜索酒店..."}}
 
@@ -537,32 +307,160 @@ class MultiAgentTripPlanner:
             # 所有节点完成，解析最终计划
             yield {"event": "progress", "data": {"stage": "parsing", "progress": 95, "message": "正在解析结果..."}}
 
-            final_plan_str = final_state.get("final_plan", "")
-            if final_plan_str and final_plan_str != f"错误:" and not final_plan_str.startswith("错误"):
-                trip_plan = self._parse_response(final_plan_str, request)
-                yield {"event": "progress", "data": {"stage": "complete", "progress": 100, "message": "完成!"}}
-                yield {"event": "final_result", "data": {"success": True, "message": "旅行计划生成成功", "data": trip_plan.model_dump()}}
-                print(f"\n{'='*60}")
-                print(f"✅ 旅行计划流式生成完成!")
-                print(f"{'='*60}\n")
-            else:
-                print(f"[WARN] 最终计划为空，使用备用方案")
+            raw_plan = final_state.get("final_plan", "")
+            trip_plan = None
+
+            if isinstance(raw_plan, dict):
+                try:
+                    trip_plan = TripPlan(**raw_plan)
+                    print(f"[OK] 结构化输出解析成功")
+                except Exception as e:
+                    print(f"[WARN] 结构化输出转 TripPlan 失败: {e}")
+
+            if trip_plan is None:
+                final_plan_str = raw_plan if isinstance(raw_plan, str) else ""
+                if final_plan_str and final_plan_str != f"错误:" and not final_plan_str.startswith("错误"):
+                    trip_plan = self._parse_response(final_plan_str, request)
+
+            if trip_plan is None:
+                print(f"[WARN] 最终计划无效，使用备用方案")
                 trip_plan = self._create_fallback_plan(request)
-                yield {"event": "progress", "data": {"stage": "complete", "progress": 100, "message": "完成!"}}
-                yield {"event": "final_result", "data": {"success": True, "message": "旅行计划已生成(备用方案)", "data": trip_plan.model_dump()}}
+
+            # 创建对话记录
+            if session_id and trip_plan:
+                try:
+                    request_dict = request.model_dump()
+                    plan_dict = trip_plan.model_dump()
+                    title = f"{request.city}{request.travel_days}日游"
+                    conv_service = get_conversation_service()
+                    record = await conv_service.create_conversation(
+                        session_id=session_id,
+                        title=title,
+                        request_data=request_dict,
+                        plan_data=plan_dict,
+                    )
+                    plan_id = record.id
+                    conversation_id = record.conversation_id or ""
+                    print(f"[OK] 对话记录已创建: conversation_id={conversation_id}, plan_id={plan_id}")
+                except Exception as conv_err:
+                    print(f"[WARN] 创建对话记录失败: {conv_err}")
+                    import traceback
+                    traceback.print_exc()
+
+            yield {"event": "progress", "data": {"stage": "complete", "progress": 100, "message": "完成!"}}
+            result_data = trip_plan.model_dump()
+            result_data["_meta"] = {
+                "plan_id": plan_id,
+                "conversation_id": conversation_id,
+                "version_number": 1,
+            } if plan_id else {}
+            yield {"event": "final_result", "data": {"success": True, "message": "旅行计划生成成功", "data": result_data}}
+            print(f"\n{'='*60}")
+            print(f"[完成] 旅行计划流式生成成功!")
+            print(f"{'='*60}\n")
 
         except Exception as e:
             print(f"[ERROR] 流式生成旅行计划失败: {str(e)}")
             import traceback
             traceback.print_exc()
-            # 返回错误事件
             yield {"event": "error", "data": {"error": f"生成旅行计划失败: {str(e)}", "code": "SYSTEM_ERROR"}}
-            # 尝试返回备用计划
             try:
                 fallback_plan = self._create_fallback_plan(request)
                 yield {"event": "final_result", "data": {"success": True, "message": "已生成备用旅行计划", "data": fallback_plan.model_dump()}}
             except:
                 pass
+
+    async def modify_plan_stream(
+        self,
+        plan_id: str,
+        modification_text: str,
+        session_id: str,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        基于已有计划进行流式修改（只运行 planner 节点）
+
+        Args:
+            plan_id: 原计划 ID
+            modification_text: 用户修改请求
+            session_id: 会话ID
+
+        Yields:
+            SSE 事件字典
+        """
+        try:
+            yield {"event": "progress", "data": {"stage": "loading", "progress": 10, "message": "正在加载原计划..."}}
+
+            # 1. 加载原计划
+            history_service = get_history_service()
+            record = await history_service.get_trip(plan_id)
+            if not record:
+                yield {"event": "error", "data": {"error": "原计划记录不存在", "code": "PLAN_NOT_FOUND"}}
+                return
+
+            plan_data_str = record.plan_data
+            if not plan_data_str:
+                yield {"event": "error", "data": {"error": "原计划数据为空", "code": "PLAN_DATA_EMPTY"}}
+                return
+
+            import json
+            original_plan = json.loads(plan_data_str) if isinstance(plan_data_str, str) else plan_data_str
+            request_data = json.loads(record.request_data) if isinstance(record.request_data, str) else (record.request_data or {})
+
+            # 2. 准备修改上下文（使用原 request，但保留原始请求数据）
+            yield {"event": "progress", "data": {"stage": "modifying", "progress": 30, "message": "正在根据请求修改计划..."}}
+
+            # 3. 确保技能已初始化
+            await self._ensure_skills()
+
+            # 4. 调用 planner_skill.modify_plan()
+            yield {"event": "progress", "data": {"stage": "planning", "progress": 50, "message": "正在生成修改后的计划..."}}
+            new_plan = await self.planner_skill.modify_plan(
+                original_plan=original_plan,
+                modification_text=modification_text,
+                request=request_data,
+            )
+
+            # 5. 验证生成结果
+            yield {"event": "progress", "data": {"stage": "saving", "progress": 80, "message": "正在保存新版本..."}}
+            trip_plan = TripPlan(**new_plan)
+
+            # 6. 通过 ConversationService 保存新版本
+            conv_service = get_conversation_service()
+            new_record = await conv_service.add_version(
+                parent_plan_id=plan_id,
+                session_id=session_id,
+                modification_text=modification_text,
+                request_data=request_data,
+                plan_data=new_plan,
+            )
+
+            new_plan_id = ""
+            new_conversation_id = ""
+            new_version_number = 1
+
+            if new_record:
+                new_plan_id = new_record.id
+                new_conversation_id = new_record.conversation_id or ""
+                new_version_number = new_record.version_number or 1
+                print(f"[OK] 新版本已保存: {new_plan_id} (v{new_version_number})")
+
+            yield {"event": "progress", "data": {"stage": "complete", "progress": 100, "message": "修改完成!"}}
+
+            # 7. 返回结果
+            result_data = trip_plan.model_dump()
+            result_data["_meta"] = {
+                "plan_id": new_plan_id,
+                "conversation_id": new_conversation_id,
+                "version_number": new_version_number,
+                "modification_text": modification_text,
+            }
+            yield {"event": "final_result", "data": {"success": True, "message": "计划修改成功", "data": result_data}}
+
+        except Exception as e:
+            print(f"[ERROR] 修改计划失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            yield {"event": "error", "data": {"error": f"修改计划失败: {str(e)}", "code": "MODIFY_ERROR"}}
 
     def plan_trip(self, request: TripRequest) -> TripPlan:
         """
@@ -577,24 +475,20 @@ class MultiAgentTripPlanner:
         import asyncio
 
         try:
-            # 尝试获取当前事件循环
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # 如果在异步环境中,创建新任务
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(asyncio.run, self.plan_trip_async(request))
                     return future.result()
             else:
-                # 如果在同步环境中,直接运行
                 return loop.run_until_complete(self.plan_trip_async(request))
         except RuntimeError:
-            # 如果没有事件循环,创建新的
             return asyncio.run(self.plan_trip_async(request))
 
     def _parse_response(self, response: str, request: TripRequest) -> TripPlan:
         """
-        解析Agent响应
+        解析Agent响应（回退路径：从 LLM 文本输出中提取 JSON）
 
         Args:
             response: Agent响应文本
@@ -604,7 +498,6 @@ class MultiAgentTripPlanner:
             旅行计划
         """
         try:
-            # 尝试从响应中提取JSON
             if "```json" in response:
                 json_start = response.find("```json") + 7
                 json_end = response.find("```", json_start)
@@ -620,17 +513,12 @@ class MultiAgentTripPlanner:
             else:
                 raise ValueError("响应中未找到JSON数据")
 
-            # 解析JSON
             data = json.loads(json_str)
-
-            # 转换为TripPlan对象
             trip_plan = TripPlan(**data)
-
             return trip_plan
 
         except Exception as e:
-            print(f"⚠️  解析响应失败: {str(e)}")
-            print(f"   将使用备用方案生成计划")
+            print(f"[WARN] 解析响应失败: {str(e)}")
             return self._create_fallback_plan(request)
 
     def _create_fallback_plan(self, request: TripRequest) -> TripPlan:
@@ -639,10 +527,8 @@ class MultiAgentTripPlanner:
 
         from datetime import datetime, timedelta
 
-        # 解析日期
         start_date = datetime.strptime(request.start_date, "%Y-%m-%d")
 
-        # 创建每日行程
         days = []
         for i in range(request.travel_days):
             current_date = start_date + timedelta(days=i)
@@ -683,13 +569,14 @@ class MultiAgentTripPlanner:
 
     async def cleanup(self):
         """清理资源"""
-        # HTTP客户端由httpx管理，不需要手动清理
-        print("HTTP客户端资源已自动管理")
+        self._compiled_workflow = None
+        print("Agent资源已清理")
 
 
-# 全局多智能体系统实例
+# ============ 全局单例 ============
+
 _multi_agent_planner = None
-_multi_agent_lock = None  # 添加锁，确保线程安全
+_multi_agent_lock = None
 
 
 def get_trip_planner_agent() -> MultiAgentTripPlanner:
@@ -703,7 +590,6 @@ def get_trip_planner_agent() -> MultiAgentTripPlanner:
         if _multi_agent_planner is None:
             _multi_agent_planner = MultiAgentTripPlanner()
         elif _multi_agent_planner.should_reset():
-            # 如果 Agent 需要重置，创建新实例
             print("[INFO] 旧 Agent 实例失效，重新创建...")
             _multi_agent_planner = MultiAgentTripPlanner()
 

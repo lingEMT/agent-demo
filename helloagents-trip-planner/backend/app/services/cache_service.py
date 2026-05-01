@@ -27,6 +27,7 @@ class CacheNamespace(str, Enum):
     ROUTE = "amap:route"
     POI_DETAIL = "amap:poi_detail"
     GEOCODE = "amap:geocode"
+    LLM_RESPONSE = "llm:response"
 
 
 # 缓存TTL配置（单位：秒）
@@ -36,6 +37,7 @@ CACHE_TTL = {
     CacheNamespace.ROUTE: 1800,             # 30分钟（步行默认）
     CacheNamespace.POI_DETAIL: 86400,       # 24小时
     CacheNamespace.GEOCODE: 604800,         # 7天
+    CacheNamespace.LLM_RESPONSE: 3600,      # 1小时
 }
 
 # 不同路线类型的不同TTL

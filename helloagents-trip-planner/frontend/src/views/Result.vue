@@ -286,6 +286,16 @@
         </a-list>
         </a-card>
       </div>
+
+      <!-- 对话面板 (ChatPanel) -->
+      <ChatPanel
+        v-if="conversationId"
+        :planId="currentPlanId"
+        :conversationId="conversationId"
+        :sessionId="sessionId"
+        :currentPlan="tripPlan"
+        @plan-changed="onPlanChanged"
+      />
     </div>
 
     <a-empty v-else description="没有找到旅行计划数据">
@@ -315,7 +325,8 @@ import { DownOutlined } from '@ant-design/icons-vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
-import type { TripPlan } from '@/types'
+import ChatPanel from '@/components/ChatPanel.vue'
+import type { TripPlan, TripPlanMeta } from '@/types'
 
 const router = useRouter()
 const tripPlan = ref<TripPlan | null>(null)
@@ -326,10 +337,42 @@ const activeSection = ref('overview')
 const activeDays = ref<number[]>([0]) // 默认展开第一天
 let map: any = null
 
+// 对话记忆状态
+const conversationId = ref('')
+const currentPlanId = ref('')
+const currentVersionNumber = ref(1)
+const sessionId = ref('')
+
+const getSessionId = (): string => {
+  let sid = localStorage.getItem('trip_session_id')
+  if (!sid) {
+    sid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0
+      const v = c === 'x' ? r : (r & 0x3) | 0x8
+      return v.toString(16)
+    })
+    localStorage.setItem('trip_session_id', sid)
+  }
+  return sid
+}
+
 onMounted(async () => {
+  sessionId.value = getSessionId()
+
   const data = sessionStorage.getItem('tripPlan')
   if (data) {
-    tripPlan.value = JSON.parse(data)
+    const planData = JSON.parse(data)
+    tripPlan.value = planData
+
+    // 加载元信息
+    const metaStr = sessionStorage.getItem('tripPlanMeta')
+    if (metaStr) {
+      const meta: TripPlanMeta = JSON.parse(metaStr)
+      currentPlanId.value = meta.plan_id || ''
+      conversationId.value = meta.conversation_id || ''
+      currentVersionNumber.value = meta.version_number || 1
+    }
+
     // 加载景点图片
     await loadAttractionPhotos()
     // 等待DOM渲染完成后初始化地图
@@ -337,6 +380,38 @@ onMounted(async () => {
     initMap()
   }
 })
+
+// 计划切换回调（来自 ChatPanel 的版本切换/修改）
+const onPlanChanged = (
+  plan: TripPlan,
+  newPlanId: string,
+  versionNumber: number
+) => {
+  tripPlan.value = plan
+  currentPlanId.value = newPlanId
+  currentVersionNumber.value = versionNumber
+
+  // 更新 sessionStorage
+  sessionStorage.setItem('tripPlan', JSON.stringify(plan))
+  sessionStorage.setItem(
+    'tripPlanMeta',
+    JSON.stringify({
+      plan_id: newPlanId,
+      conversation_id: conversationId.value,
+      version_number: versionNumber,
+    })
+  )
+
+  // 重新初始化地图
+  if (map) {
+    map.destroy()
+  }
+  nextTick(() => {
+    initMap()
+  })
+
+  message.success(`已切换到 v${versionNumber}`)
+}
 
 const goBack = () => {
   router.push('/')

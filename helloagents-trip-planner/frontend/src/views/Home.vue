@@ -324,18 +324,32 @@ const handleSubmit = async () => {
           loadingStatus.value = '✅ 完成!'
 
           if (data.success && data.data) {
-            sessionStorage.setItem('tripPlan', JSON.stringify(data.data))
+            const planData = data.data as any
+            const meta = planData._meta || {}
+
+            sessionStorage.setItem('tripPlan', JSON.stringify(planData))
+
+            // 存储元信息（plan_id, conversation_id, version_number）
+            if (meta.plan_id) {
+              sessionStorage.setItem('tripPlanMeta', JSON.stringify({
+                plan_id: meta.plan_id,
+                conversation_id: meta.conversation_id,
+                version_number: meta.version_number,
+              }))
+            }
+
             message.success('旅行计划生成成功!')
 
-            // Fire-and-forget 保存到数据库
+            // Fire-and-forget 保存到数据库（向后兼容）
+            // 清理掉 _meta 再保存
+            const { _meta, ...cleanPlan } = planData
             const title = `${requestData.city}${requestData.travel_days}日游`
             saveTripRecord({
               session_id: sessionId.value,
               title,
               request_data: JSON.stringify(requestData),
-              plan_data: JSON.stringify(data.data),
+              plan_data: JSON.stringify(cleanPlan),
             }).catch((err) => {
-              // 静默处理，不影响用户体验
               console.warn('保存历史记录失败（不影响使用）:', err)
             })
 
@@ -351,7 +365,8 @@ const handleSubmit = async () => {
           message.error(data.error || '生成旅行计划失败,请稍后重试')
         }
       },
-      abortController.value.signal
+      abortController.value.signal,
+      sessionId.value
     )
   } catch (error: any) {
     if (error.name === 'AbortError') {

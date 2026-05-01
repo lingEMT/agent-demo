@@ -154,3 +154,45 @@ export interface TripRecordListResponse {
   page_size: number
 }
 
+// ============ 对话记忆/版本管理类型 ============
+
+export interface PlanVersion {
+  id: string
+  version_number: number
+  is_current: boolean
+  modification_request: string | null
+  created_at: string
+  plan_data?: TripPlan | null
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: string
+  plan_id?: string
+  version_number?: number
+}
+
+export interface ConversationSummary {
+  conversation_id: string
+  title: string
+  latest_version: number
+  total_versions: number
+  city: string
+  created_at: string
+  updated_at: string
+  latest_plan_id: string
+}
+
+export interface TripPlanMeta {
+  plan_id: string
+  conversation_id: string
+  version_number: number
+}
+
+export interface ModificationRequest {
+  plan_id: string
+  modification_text: string
+  session_id: string
+}
+

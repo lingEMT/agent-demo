@@ -55,9 +55,14 @@ export async function generateTripPlan(formData: TripFormData): Promise<TripPlan
 export async function generateTripPlanStream(
   formData: TripFormData,
   callbacks: StreamCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  sessionId?: string
 ): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/api/trip/plan/stream`, {
+  let url = `${API_BASE_URL}/api/trip/plan/stream`
+  if (sessionId) {
+    url += `?session_id=${encodeURIComponent(sessionId)}`
+  }
+  const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(formData),
@@ -130,6 +135,122 @@ export async function healthCheck(): Promise<any> {
   } catch (error: any) {
     console.error('健康检查失败:', error)
     throw new Error(error.message || '健康检查失败')
+  }
+}
+
+// ============ 对话记忆/版本管理 API ============
+
+/**
+ * 流式修改旅行计划 (SSE)
+ * 基于已有计划进行自然语言对话式修改
+ */
+export async function modifyTripPlanStream(
+  planId: string,
+  modificationText: string,
+  sessionId: string,
+  callbacks: StreamCallbacks,
+  signal?: AbortSignal
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/trip/plan/modify/${planId}/stream`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        modification_text: modificationText,
+        session_id: sessionId,
+      }),
+      signal,
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw new Error('响应体不可读')
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let currentEvent = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          const rawData = line.slice(6)
+          try {
+            const data = JSON.parse(rawData)
+            switch (currentEvent) {
+              case 'progress':
+                callbacks.onProgress?.(data)
+                break
+              case 'final_result':
+                callbacks.onFinalResult?.(data)
+                break
+              case 'error':
+                callbacks.onError?.(data)
+                break
+            }
+          } catch (parseError) {
+            console.warn('SSE数据解析失败:', rawData)
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+/**
+ * 获取对话所有版本
+ */
+export async function getConversation(conversationId: string): Promise<any> {
+  try {
+    const response = await apiClient.get(
+      `/api/trip/conversation/${conversationId}`
+    )
+    return response.data
+  } catch (error: any) {
+    console.error('获取对话版本链失败:', error)
+    throw new Error(
+      error.response?.data?.detail || error.message || '获取对话版本链失败'
+    )
+  }
+}
+
+/**
+ * 列出所有对话（按对话分组）
+ */
+export async function listConversations(
+  sessionId: string,
+  page: number = 1,
+  pageSize: number = 20
+): Promise<any> {
+  try {
+    const response = await apiClient.get('/api/trip/conversations/list', {
+      params: { session_id: sessionId, page, page_size: pageSize },
+    })
+    return response.data
+  } catch (error: any) {
+    console.error('获取对话列表失败:', error)
+    throw new Error(
+      error.response?.data?.detail || error.message || '获取对话列表失败'
+    )
   }
 }
 

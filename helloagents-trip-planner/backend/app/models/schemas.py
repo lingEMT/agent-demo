@@ -204,3 +204,42 @@ class ErrorResponse(BaseModel):
     message: str = Field(..., description="错误消息")
     error_code: Optional[str] = Field(default=None, description="错误代码")
 
+
+# ============ 对话记忆/版本管理模型 ============
+
+class ModificationRequest(BaseModel):
+    """修改请求（plan_id 通过 URL 路径传入）"""
+    modification_text: str = Field(..., description="修改描述文本")
+    session_id: str = Field(..., description="会话ID")
+
+
+class PlanVersionInfo(BaseModel):
+    """计划版本信息"""
+    id: str = Field(..., description="记录ID")
+    version_number: int = Field(..., description="版本号")
+    is_current: bool = Field(default=False, description="是否为最新版本")
+    modification_request: Optional[str] = Field(default=None, description="修改请求文本")
+    created_at: str = Field(..., description="创建时间")
+    plan_data: Optional[dict] = Field(default=None, description="计划数据")
+
+
+class ConversationSummary(BaseModel):
+    """对话摘要"""
+    conversation_id: str = Field(..., description="对话ID")
+    title: str = Field(..., description="对话标题")
+    latest_version: int = Field(..., description="最新版本号")
+    total_versions: int = Field(..., description="总版本数")
+    city: str = Field(default="", description="目的地城市")
+    created_at: str = Field(..., description="创建时间")
+    updated_at: str = Field(..., description="更新时间")
+    latest_plan_id: str = Field(..., description="最新计划ID")
+
+
+class ConversationListResponse(BaseModel):
+    """对话列表响应"""
+    success: bool = Field(default=True, description="是否成功")
+    data: List[ConversationSummary] = Field(default=[], description="对话列表")
+    total: int = Field(default=0, description="总数")
+    page: int = Field(default=1, description="当前页码")
+    page_size: int = Field(default=20, description="每页数量")
+

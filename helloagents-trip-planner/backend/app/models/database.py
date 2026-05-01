@@ -62,6 +62,30 @@ class TripRecord(Base):
         comment="更新时间",
     )
 
+    # 对话记忆/版本链字段
+    conversation_id = Column(
+        String(36),
+        index=True,
+        nullable=True,
+        comment="对话分组ID，同一颗修改树共享",
+    )
+    parent_id = Column(
+        String(36),
+        nullable=True,
+        comment="父计划UUID，根计划为None",
+    )
+    version_number = Column(
+        Integer,
+        default=1,
+        nullable=False,
+        comment="版本号，从1开始递增",
+    )
+    modification_request = Column(
+        SQLITE_TEXT,
+        nullable=True,
+        comment="导致此版本的修改文本，根版本为None",
+    )
+
     def __repr__(self):
         return f"<TripRecord(id={self.id}, title={self.title}, city={self.city})>"
 
