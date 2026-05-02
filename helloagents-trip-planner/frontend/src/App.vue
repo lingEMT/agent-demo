@@ -3,7 +3,7 @@
     <a-layout style="min-height: 100vh">
       <a-layout-header style="background: #001529; padding: 0 50px; display: flex; align-items: center; justify-content: space-between;">
         <div style="color: white; font-size: 24px; font-weight: bold">
-          🌍 HelloAgents智能旅行助手
+          🌍 智行旅控
         </div>
         <a-menu
           v-model:selectedKeys="selectedKeys"
@@ -37,7 +37,7 @@
         <router-view />
       </a-layout-content>
       <a-layout-footer style="text-align: center">
-        HelloAgents智能旅行助手 ©2025 基于HelloAgents框架
+        智行旅控 ©2026 基于langchain + langgraph框架
       </a-layout-footer>
     </a-layout>
   </div>

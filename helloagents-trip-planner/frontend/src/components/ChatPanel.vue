@@ -2,38 +2,49 @@
   <div class="chat-panel">
     <!-- 顶部：版本标签栏 -->
     <div class="chat-header">
-      <div class="version-tabs">
-        <a-tabs
-          v-model:activeKey="currentVersionKey"
+      <div class="version-tabs-row">
+        <div class="version-tabs">
+          <a-tabs
+            v-model:activeKey="currentVersionKey"
+            size="small"
+            type="card"
+            @change="onVersionChange"
+          >
+            <a-tab-pane
+              v-for="ver in versions"
+              :key="String(ver.version_number)"
+              :tab="`v${ver.version_number}`"
+            />
+            <!-- 超过30个版本时折叠 -->
+            <template v-if="versions.length > 30" #addon>
+              <a-dropdown>
+                <template #overlay>
+                  <a-menu @click="onVersionDropdownChange">
+                    <a-menu-item
+                      v-for="ver in collapsedVersions"
+                      :key="String(ver.version_number)"
+                    >
+                      v{{ ver.version_number }}
+                      <span v-if="ver.modification_request">
+                        - {{ truncateText(ver.modification_request, 20) }}
+                      </span>
+                    </a-menu-item>
+                  </a-menu>
+                </template>
+                <a-button size="small" type="link">更多...</a-button>
+              </a-dropdown>
+            </template>
+          </a-tabs>
+        </div>
+        <a-button
           size="small"
-          type="card"
-          @change="onVersionChange"
+          :disabled="versions.length < 2"
+          @click="showDiffModal = true"
+          class="diff-button"
         >
-          <a-tab-pane
-            v-for="ver in versions"
-            :key="String(ver.version_number)"
-            :tab="`v${ver.version_number}`"
-          />
-          <!-- 超过30个版本时折叠 -->
-          <template v-if="versions.length > 30" #addon>
-            <a-dropdown>
-              <template #overlay>
-                <a-menu @click="onVersionDropdownChange">
-                  <a-menu-item
-                    v-for="ver in collapsedVersions"
-                    :key="String(ver.version_number)"
-                  >
-                    v{{ ver.version_number }}
-                    <span v-if="ver.modification_request">
-                      - {{ truncateText(ver.modification_request, 20) }}
-                    </span>
-                  </a-menu-item>
-                </a-menu>
-              </template>
-              <a-button size="small" type="link">更多...</a-button>
-            </a-dropdown>
-          </template>
-        </a-tabs>
+          <template #icon><DiffOutlined /></template>
+          比较版本
+        </a-button>
       </div>
     </div>
 
@@ -103,7 +114,7 @@
           placeholder="输入修改请求，例如：第二天轻松些..."
           :rows="2"
           :disabled="streaming || loadingVersions"
-          @pressEnter="sendMessage"
+          @keydown.enter.prevent="sendMessage"
           class="chat-textarea"
         />
         <a-button
@@ -118,14 +129,27 @@
         </a-button>
       </div>
     </div>
+
+    <!-- 版本对比模态框 -->
+    <a-modal
+      v-model:open="showDiffModal"
+      title="版本对比"
+      :footer="null"
+      width="800px"
+      destroyOnClose
+    >
+      <VersionDiff :versions="versions" />
+    </a-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { message } from 'ant-design-vue'
+import { DiffOutlined } from '@ant-design/icons-vue'
 import { modifyTripPlanStream, getConversation } from '@/services/api'
 import type { PlanVersion, ChatMessage, TripPlan, TripPlanMeta } from '@/types'
+import VersionDiff from './VersionDiff.vue'
 
 const props = defineProps<{
   planId: string
@@ -148,6 +172,7 @@ const loadingVersions = ref(false)
 const errorMsg = ref('')
 const currentVersionKey = ref('1')
 const messagesRef = ref<HTMLElement | null>(null)
+const showDiffModal = ref(false)
 
 // 超过30个版本时折叠
 const collapsedVersions = computed(() => {
@@ -389,6 +414,22 @@ onMounted(() => {
   padding: 8px 12px 0;
   border-bottom: 1px solid #f0f0f0;
   background: #fafafa;
+}
+
+.version-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+.diff-button {
+  flex-shrink: 0;
+  font-size: 12px;
 }
 
 .version-tabs :deep(.ant-tabs) {

@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import delete, desc, select, update
+from sqlalchemy import delete, desc, select, update, func
 
 from ..core.database import get_session
 from ..models.database import TripRecord
@@ -79,6 +79,38 @@ class HistoryService:
             session.add(record)
             await session.commit()
             await session.refresh(record)
+
+            # 清理旧记录：同 session 最多保留 5 条（不含对话版本链记录）
+            MAX_RECORDS = 5
+            count_result = await session.execute(
+                select(func.count())
+                .select_from(TripRecord)
+                .where(
+                    TripRecord.session_id == session_id,
+                    TripRecord.conversation_id.is_(None),
+                )
+            )
+            total = count_result.scalar() or 0
+            if total > MAX_RECORDS:
+                # 找出需要删除的旧记录
+                excess = total - MAX_RECORDS
+                old_result = await session.execute(
+                    select(TripRecord.id)
+                    .where(
+                        TripRecord.session_id == session_id,
+                        TripRecord.conversation_id.is_(None),
+                    )
+                    .order_by(TripRecord.created_at.asc())
+                    .limit(excess)
+                )
+                old_ids = [row[0] for row in old_result.fetchall()]
+                if old_ids:
+                    await session.execute(
+                        delete(TripRecord).where(TripRecord.id.in_(old_ids))
+                    )
+                    await session.commit()
+                    print(f"[HISTORY] 已清理 {len(old_ids)} 条旧记录，session {session_id[:8]}... 保留 {MAX_RECORDS} 条")
+
             return record
 
     async def get_trip(self, record_id: str) -> Optional[TripRecord]:
